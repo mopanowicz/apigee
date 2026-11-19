@@ -113,3 +113,57 @@ flowchart TB
 ```
 
 > **Uwaga produkcyjna:** Konfiguracja **All-in-One** nie zapewnia wysokiej dostępności (HA). W środowiskach produkcyjnych komponenty rozdziela się na wiele węzłów (standardowe topologie to np. **5-węzłowa** dla minimalnego klastra lub **9 / 12 / 13-węzłowa** z klastrem 3x Cassandra/ZooKeeper, parą Router+MP za zewnętrznym Load Balancerem oraz parą Master–Standby dla PostgreSQL i Qpid).
+
+
+---
+
+## 4. Model dostępu: Deweloper, Aplikacja i Produkt API
+
+W Apigee **Deweloper**, **Aplikacja** i **Produkt API** tworzą model kontroli dostępu (i analityki) dla konsumentów Twoich API. W Apigee **nigdy nie nadaje się aplikacjom dostępu bezpośrednio do API Proxy** — zawsze odbywa się to za pośrednictwem Produktu API.
+
+### Deweloper (Developer)
+* **Kim jest:** konsumentem Twoich API — osobą (lub kontem zespołu/partnera), która buduje aplikacje klienckie korzystające z udostępnianych usług. *(Nie należy go mylić z administratorem lub twórcą API Proxy pracującym w Edge UI).*
+* **Co zawiera:** identyfikowany jest przez unikalny adres e-mail, posiada status (`active` / `inactive`) oraz opcjonalne atrybuty niestandardowe (*Custom Attributes*).
+* **Rola:** jest właścicielem jednej lub wielu **Aplikacji**. Dezaktywacja dewelopera blokuje ruch ze wszystkich jego aplikacji.
+
+### Produkt API (API Product)
+* **Czym jest:** logicznym pakietem biznesowo-technicznym stanowiącym **jednostkę dostępu i pakietowania API**.
+* **Co definiuje:**
+  * **Zakres zasobów:** które **API Proxy** oraz konkretne ścieżki/metody HTTP wchodzą w skład pakietu (np. tylko `GET /products/**`),
+  * **Środowiska (Environments):** gdzie produkt działa (np. `test`, `prod`),
+  * **Limity (Quota):** np. 100 zapytań/min (odczytywane później przez politykę *Quota* w proxy),
+  * **Tryb zatwierdzania (Approval):** automatyczny (*Auto*) lub ręczny (*Manual*) dla nowych aplikacji,
+  * **Zakresy OAuth (Scopes)** oraz **atrybuty niestandardowe** (np. poziom pakietu: `Free` / `Gold`).
+* **Rola:** pozwala sprzedawać lub udostępniać to samo API Proxy na różne sposoby bez duplikowania kodu proxy (np. `Orders-Free` tylko do odczytu z niskim limitem oraz `Orders-Premium` z pełnym CRUD i wysokim limitem).
+
+### Aplikacja (App / Developer App)
+* **Czym jest:** reprezentacją konkretnego klienta (np. aplikacji mobilnej iOS, portalu partnera B2B, mikroserwisu), który będzie wywoływał API.
+* **Co zawiera:**
+  * powiązanie z właścicielem (**Deweloperem**),
+  * listę subskrybowanych **Produktów API** (każdy ze statusem np. `approved` / `revoked`),
+  * wygenerowane przez Apigee poświadczenia (**Credentials**): **Consumer Key (API Key / Client ID)** oraz **Consumer Secret (Client Secret)**,
+  * opcjonalny `Callback URL` (dla przepływów OAuth 2.0) i atrybuty niestandardowe.
+* **Rola:** to poświadczenia Aplikacji klient przesyła w żądaniach API (bezpośrednio jako API Key lub do uzyskania tokenu OAuth 2.0).
+
+### Relacje pomiędzy pojęciami
+
+```mermaid
+flowchart LR
+    Dev["Deweloper (Konsument API)"]
+    App["Aplikacja (API Key / Secret)"]
+    Prod["Produkt API (Zasoby, Środowiska, Quota)"]
+    Proxy["API Proxy (Polityki, Routing)"]
+    Backend["Backend (Target Server)"]
+
+    Dev -->|"posiada (1:N)"| App
+    App -->|"subskrybuje (N:M)"| Prod
+    Prod -->|"grupuje (N:M)"| Proxy
+    Proxy -->|"wywołuje"| Backend
+```
+
+### Jak wygląda to w trakcie wywołania API (Runtime)?
+1. Klient wysyła żądanie do **API Proxy**, dołączając klucz API (lub token OAuth) swojej **Aplikacji**.
+2. Polityka w API Proxy (`VerifyAPIKey` lub `OAuthV2`) sprawdza poświadczenia w bazie Cassandra:
+   * czy **Aplikacja** i jej **Deweloper** są aktywni,
+   * czy Aplikacja ma zatwierdzony dostęp do **Produktu API**, który obejmuje wywoływane proxy, ścieżkę zasobu oraz środowisko.
+3. Po pozytywnej weryfikacji Apigee udostępnia w kontekście żądania zmienne z metadanych Dewelopera, Aplikacji i Produktu (np. limit Quota z Produktu) oraz zapisuje w **Analityce**, który dokładnie deweloper, przez którą aplikację i w ramach jakiego produktu wykonał zapytanie.
